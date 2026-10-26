@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-multipart
+google-genai
+psycopg2-binary
+langchain-text-splitters
+python-dotenv
