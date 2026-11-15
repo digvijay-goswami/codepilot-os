@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: ${PORT:8080}   # Render injects PORT
 
 spring:
   datasource:
@@ -7,19 +7,17 @@ spring:
     username: admin
     password: admin
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 5        # small: Render free = 512 MB, Neon free has limited connections
+      connection-timeout: 60000   # Neon can take a few seconds to wake from idle
+      max-lifetime: 240000        # recycle connections before Neon's 5-minute idle suspend
   jpa:
     hibernate:
       ddl-auto: update
     show-sql: true
-  security:
-    oauth2:
-      client:
-        registration:
-          github:
-            client-id: ${GITHUB_CLIENT_ID:}
-            client-secret: ${GITHUB_CLIENT_SECRET:}
-            scope: read:user,repo
-
+app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
 ai-service:
-  url: http://localhost:8000
-  
+  url: ${AI_SERVICE_URL:http://localhost:8000}
+

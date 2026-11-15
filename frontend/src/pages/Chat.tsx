@@ -1,28 +1,37 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { askRepo } from '../api'
+import PulseMark from '../components/PulseMark'
+import RichText from '../components/RichText'
 
 type Msg = {
   role: 'user' | 'ai'
   text: string
+  error?: boolean
   sources?: { file: string; start_line: number; end_line: number }[]
 }
+
+const SUGGESTIONS = [
+  'What does this repository do?',
+  'Where is the database configured?',
+  'Where are the main entry points?',
+]
 
 export default function Chat() {
   const { id } = useParams()
   const [question, setQuestion] = useState('')
   const [loading, setLoading] = useState(false)
   const [messages, setMessages] = useState<Msg[]>([
-    { role: 'ai', text: 'Hi! Ask me anything about this repository, for example: Where is the database configured?' },
+    { role: 'ai', text: 'Ask me anything about this repository. I answer from its code and show which files I used.' },
   ])
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [messages, loading])
 
-  const send = async () => {
-    const q = question.trim()
+  const send = async (override?: string) => {
+    const q = (override ?? question).trim()
     if (!q || loading) return
     setQuestion('')
     setMessages((m) => [...m, { role: 'user', text: q }])
@@ -34,7 +43,7 @@ export default function Chat() {
       const detail = e.response?.data?.detail
       setMessages((m) => [
         ...m,
-        { role: 'ai', text: 'Error: ' + (typeof detail === 'string' ? detail : e.message) },
+        { role: 'ai', error: true, text: 'Error: ' + (typeof detail === 'string' ? detail : e.message) },
       ])
     } finally {
       setLoading(false)
@@ -42,36 +51,60 @@ export default function Chat() {
   }
 
   return (
-    <div className="container" style={{ maxWidth: 760 }}>
-      <Link to={`/report/${id}`} className="muted">← Back to report</Link>
-      <h2 style={{ margin: '16px 0 4px' }}>Chat with repository #{id}</h2>
-      <p className="muted" style={{ marginTop: 0 }}>Answers come from the code stored in your vector database.</p>
+    <div className="chat">
+      <div className="chat-head">
+        <Link to={`/report/${id}`} className="back" style={{ marginBottom: 14 }}>← Back to report</Link>
+        <h1>Chat with repository #{id}</h1>
+        <p>Answers are drawn from this repository's code.</p>
+      </div>
 
-      <div className="card chat-box">
+      <div className="chat-log" aria-live="polite">
         {messages.map((m, i) => (
-          <div key={i} className={`msg ${m.role}`}>
-            {m.text}
-            {m.sources && m.sources.length > 0 && (
-              <div className="sources">
-                Sources: {m.sources.map((s) => `${s.file} (${s.start_line}-${s.end_line})`).join(' · ')}
-              </div>
-            )}
+          <div key={i} className={`msg ${m.role}${m.error ? ' error' : ''}`}>
+            {m.role === 'ai' && <span className="avatar"><PulseMark size={16} /></span>}
+            <div className="msg-body">
+              {m.role === 'ai' ? <RichText text={m.text} /> : m.text}
+              {m.sources && m.sources.length > 0 && (
+                <div className="sources">
+                  <span>Sources</span>
+                  {m.sources.map((s, j) => (
+                    <span key={j} className="source-chip">{s.file}:{s.start_line}-{s.end_line}</span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         ))}
-        {loading && <div className="muted"><span className="spinner" />Thinking...</div>}
+        {messages.length === 1 && !loading && (
+          <div className="suggestions">
+            {SUGGESTIONS.map((s) => (
+              <button key={s} type="button" className="chip" onClick={() => send(s)}>{s}</button>
+            ))}
+          </div>
+        )}
+        {loading && <div className="thinking"><span className="spinner" />Searching the code</div>}
         <div ref={endRef} />
       </div>
 
-      <div className="row">
-        <input
-          className="text"
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') send() }}
-          placeholder="Ask about this codebase..."
-        />
-        <button className="btn" onClick={send} disabled={loading}>Send</button>
-      </div>
+      <form
+        className="composer"
+        onSubmit={(e) => {
+          e.preventDefault()
+          send()
+        }}
+      >
+        <div className="command">
+          <input
+            className="field"
+            aria-label="Your question"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="Ask about this codebase"
+            autoFocus
+          />
+          <button className="btn" type="submit" disabled={loading || !question.trim()}>Send</button>
+        </div>
+      </form>
     </div>
   )
 }

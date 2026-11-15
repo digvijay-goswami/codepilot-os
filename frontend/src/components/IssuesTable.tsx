@@ -1,37 +1,28 @@
+import IssueList from './IssueList'
+
 export default function IssuesTable({ issues }: { issues: any[] }) {
-  if (!issues || issues.length === 0) {
-    return <div className="card center muted">No issues found.</div>
-  }
-  const high = issues.filter((i) => i.severity === 'HIGH').length
+  const items = (issues ?? []).map((i) => ({
+    key: i.id,
+    severity: i.severity,
+    type: i.type,
+    location: `${i.filePath}${i.lineNumber ? ':' + i.lineNumber : ''}`,
+    description: i.description,
+  }))
+  const high = items.filter((i) => i.severity === 'HIGH').length
 
   return (
-    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: 20, display: 'flex', justifyContent: 'space-between' }}>
-        <strong>Detected Issues ({issues.length})</strong>
-        <span className="badge sev-HIGH">{high} high priority</span>
+    <section className="section" aria-labelledby="issues-title">
+      <div className="section-head">
+        <h2 id="issues-title">Issues found</h2>
+        <span className="muted">
+          {items.length} in total{high > 0 ? `, ${high} high priority` : ''}
+        </span>
       </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Severity</th>
-              <th>Location</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            {issues.map((i) => (
-              <tr key={i.id}>
-                <td><span className={`badge type-${i.type}`}>{i.type}</span></td>
-                <td><span className={`badge sev-${i.severity}`}>{i.severity}</span></td>
-                <td className="mono">{i.filePath}:{i.lineNumber}</td>
-                <td>{i.description}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      {items.length === 0 ? (
+        <p className="empty">No issues were found in the files that were analyzed.</p>
+      ) : (
+        <IssueList items={items} />
+      )}
+    </section>
   )
 }
