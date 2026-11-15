@@ -28,13 +28,23 @@ public class PrReviewService {
     @Value("${ai-service.url:http://localhost:8000}")
     private String aiServiceUrl;
 
+    // Optional GitHub token (env var GITHUB_TOKEN) to avoid the 60 requests/hour anonymous limit
+    @Value("${github.token:}")
+    private String githubToken;
+
     public Map<String, Object> review(String prUrl) throws Exception {
         PrUrlParser.PrRef ref = PrUrlParser.parse(prUrl);
         String api = "https://api.github.com/repos/" + ref.owner() + "/" + ref.repo()
                 + "/pulls/" + ref.number();
 
         // 1. Pull request details (title, description, author, size)
-        JsonNode pr = mapper.readTree(restTemplate.getForObject(api, String.class));
+        HttpHeaders prHeaders = new HttpHeaders();
+        prHeaders.set(HttpHeaders.USER_AGENT, "codepilot-os");
+        if (githubToken != null && !githubToken.isBlank()) prHeaders.setBearerAuth(githubToken.trim());
+        String prJson = restTemplate
+                .exchange(api, HttpMethod.GET, new HttpEntity<>(prHeaders), String.class)
+                .getBody();
+        JsonNode pr = mapper.readTree(prJson);
         String title = pr.path("title").asText("");
         String description = cut(pr.path("body").asText(""), 2000);
 
@@ -42,6 +52,7 @@ public class PrReviewService {
         HttpHeaders githubHeaders = new HttpHeaders();
         githubHeaders.set(HttpHeaders.ACCEPT, "application/vnd.github.v3.diff");
         githubHeaders.set(HttpHeaders.USER_AGENT, "codepilot-os");
+        if (githubToken != null && !githubToken.isBlank()) githubHeaders.setBearerAuth(githubToken.trim());
         String diff = restTemplate
                 .exchange(api, HttpMethod.GET, new HttpEntity<>(githubHeaders), String.class)
                 .getBody();

@@ -4,6 +4,7 @@ import com.codepilot.dto.FileDto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -24,9 +25,29 @@ public class GitHubService {
     private static final int MAX_FILES = 40;
     private static final int MAX_CHARS_PER_FILE = 15000;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    /**
+     * Optional GitHub token (env var GITHUB_TOKEN). Without it GitHub allows only 60 API calls
+     * per hour per IP, which shared hosts like Render exhaust immediately.
+     */
+    @Value("${github.token:}")
+    private String githubToken;
+
+    private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectMapper mapper = new ObjectMapper();
     private final Set<String> allowedExt = Set.of(".java", ".py", ".js", ".ts", ".tsx", ".go", ".cpp");
+
+    private RestTemplate buildRestTemplate() {
+        RestTemplate rt = new RestTemplate();
+        // Add the token to every api.github.com request (the token is read per request).
+        rt.getInterceptors().add((request, body, execution) -> {
+            if (githubToken != null && !githubToken.isBlank()
+                    && "api.github.com".equals(request.getURI().getHost())) {
+                request.getHeaders().setBearerAuth(githubToken.trim());
+            }
+            return execution.execute(request, body);
+        });
+        return rt;
+    }
 
     /** Kept so the /test-github endpoint still works. */
     public List<FileDto> fetchFiles(String githubUrl) throws Exception {
