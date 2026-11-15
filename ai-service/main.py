@@ -27,7 +27,12 @@ MAX_CHARS = 60000  # max code sent to Gemini for analysis
 if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY is missing. Add it to ai-service/.env")
 
-client = genai.Client(api_key=API_KEY.strip())
+# JSON mode (response_mime_type="application/json") needs the v1beta API.
+# Newer google-genai releases default to v1, so pin the version explicitly.
+client = genai.Client(
+    api_key=API_KEY.strip(),
+    http_options=types.HttpOptions(api_version="v1beta"),
+)
 
 
 @asynccontextmanager
