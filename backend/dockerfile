@@ -1,10 +1,15 @@
 # Stage 1: build the jar
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /app
+
+# Download from a Maven Central mirror, because Central rate-limits Render's shared build IPs (HTTP 429)
+COPY maven-settings.xml /root/.m2/settings.xml
+
 COPY pom.xml .
-RUN mvn -B dependency:go-offline
+RUN mvn -B -ntp dependency:go-offline
+
 COPY src ./src
-RUN mvn -B package -DskipTests
+RUN mvn -B -ntp package -DskipTests || (sleep 30 && mvn -B -ntp package -DskipTests)
 
 # Stage 2: run it
 FROM eclipse-temurin:17-jre-alpine
