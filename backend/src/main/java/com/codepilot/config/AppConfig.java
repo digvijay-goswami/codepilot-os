@@ -1,27 +1,23 @@
 package com.codepilot.config;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Value;
+
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.time.Duration;
+
 @Configuration
 public class AppConfig {
 
-    // Comma-separated list of allowed browser origins, e.g. https://codepilot.vercel.app
-    @Value("${app.cors.allowed-origins:http://localhost:5173}")
-    private String allowedOrigins;
-
     @Bean
-    public RestTemplate restTemplate() { 
-        return new RestTemplate(); 
-    }
-
-    @Bean
-    public ObjectMapper objectMapper() {
-        return new ObjectMapper();
+    public RestTemplate restTemplate(RestTemplateBuilder builder) {
+        return builder
+                .setConnectTimeout(Duration.ofSeconds(10))
+                .setReadTimeout(Duration.ofMinutes(5))
+                .build();
     }
 
     @Bean
@@ -30,7 +26,7 @@ public class AppConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/**")
-                        .allowedOrigins(allowedOrigins.split(","))
+                        .allowedOrigins("http://localhost:5173", "http://localhost:3000")
                         .allowedMethods("*")
                         .allowedHeaders("*");
             }
