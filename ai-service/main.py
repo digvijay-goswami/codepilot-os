@@ -23,6 +23,9 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://admin:admin@127.0.0.1:5432/codepilot"
 )
 MAX_CHARS = 60000  # max code sent to Gemini for analysis
+EMBED_BATCH = 20          # texts per embedding request (small, to stay under free-tier limits)
+MAX_CHUNKS = 150          # cap per repo so one Analyze click cannot use up the quota
+INDEX_TIME_BUDGET = 150   # seconds; stop indexing after this and keep what is stored
 
 if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY is missing. Add it to ai-service/.env")
@@ -137,24 +140,44 @@ def call_gemini(contents, config=None):
     raise last_error
 
 
-def embed(texts, task_type):
-    """Turn a list of texts into a list of number-lists (embeddings)."""
-    vectors = []
-    for i in range(0, len(texts), 50):
-        batch = texts[i : i + 50]
-        res = with_retry(
-            lambda: client.models.embed_content(
+def is_rate_limit(e):
+    """True for Gemini 429 / quota errors."""
+    code = getattr(e, "code", None)
+    text = str(e)
+    return code == 429 or "RESOURCE_EXHAUSTED" in text or "429" in text[:40]
+
+
+def embed_batch(batch, task_type, waits=(5, 15, 30, 60)):
+    """Embed one small batch. On a rate limit, wait longer each time (5, 15, 30, 60 s)."""
+    for attempt in range(len(waits) + 1):
+        try:
+            res = client.models.embed_content(
                 model=EMBED_MODEL,
                 contents=batch,
                 config=types.EmbedContentConfig(
                     task_type=task_type, output_dimensionality=EMBED_DIM
                 ),
             )
-        )
-        if res and res.embeddings:
-            for e in res.embeddings:
-                if e.values is not None:
-                    vectors.append(e.values)
+            vectors = [e.values for e in (res.embeddings or []) if e.values is not None]
+            if len(vectors) != len(batch):
+                raise RuntimeError(
+                    f"Gemini returned {len(vectors)} embeddings for {len(batch)} texts"
+                )
+            return vectors
+        except Exception as e:
+            retryable = is_rate_limit(e) or getattr(e, "code", None) in (500, 503, 504)
+            if retryable and attempt < len(waits):
+                print(f"Embedding batch failed ({type(e).__name__}), retrying in {waits[attempt]}s")
+                time.sleep(waits[attempt])
+                continue
+            raise
+
+
+def embed(texts, task_type):
+    """Embed a list of texts (used for chat questions, which are tiny)."""
+    vectors = []
+    for i in range(0, len(texts), EMBED_BATCH):
+        vectors.extend(embed_batch(texts[i : i + EMBED_BATCH], task_type))
     return vectors
 
 
@@ -182,6 +205,12 @@ def chunk_file(content, max_chars=1500, overlap_lines=3):
 
 
 def ingest_files(repo_id, files):
+    """Chunk the code, embed it in small batches and save each batch right away.
+
+    Returns (chunks_stored, chunks_total, error_message_or_None).
+    Saving per batch means that if Gemini rate-limits us half way, the chunks that
+    were already stored still work for chat.
+    """
     meta = []
     texts = []
     for f in files:
@@ -191,24 +220,44 @@ def ingest_files(repo_id, files):
             meta.append((f.path, start_line, end_line, text))
             texts.append(f"File: {f.path} (lines {start_line}-{end_line})\n{text}")
     if not texts:
-        return 0
+        return 0, 0, None
 
-    vectors = embed(texts, "RETRIEVAL_DOCUMENT")
+    total = len(texts)
+    if total > MAX_CHUNKS:
+        print(f"Repo {repo_id}: {total} chunks, indexing only the first {MAX_CHUNKS}")
+        meta, texts = meta[:MAX_CHUNKS], texts[:MAX_CHUNKS]
 
     conn = get_db()
+    stored = 0
+    error = None
+    started = time.time()
     try:
         with conn, conn.cursor() as cur:
             cur.execute("DELETE FROM embeddings WHERE repo_id = %s", (repo_id,))
-            for (path, s, e, text), vec in zip(meta, vectors):
-                cur.execute(
-                    """INSERT INTO embeddings
-                       (repo_id, file_path, start_line, end_line, chunk_text, embedding)
-                       VALUES (%s, %s, %s, %s, %s, %s::vector)""",
-                    (repo_id, path, s, e, text, to_pgvector(vec)),
-                )
+        for i in range(0, len(texts), EMBED_BATCH):
+            if time.time() - started > INDEX_TIME_BUDGET:
+                error = "time budget reached, indexed part of the repo"
+                break
+            batch_texts = texts[i : i + EMBED_BATCH]
+            batch_meta = meta[i : i + EMBED_BATCH]
+            try:
+                vectors = embed_batch(batch_texts, "RETRIEVAL_DOCUMENT")
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                break
+            with conn, conn.cursor() as cur:
+                for (path, s, e, text), vec in zip(batch_meta, vectors):
+                    cur.execute(
+                        """INSERT INTO embeddings
+                           (repo_id, file_path, start_line, end_line, chunk_text, embedding)
+                           VALUES (%s, %s, %s, %s, %s, %s::vector)""",
+                        (repo_id, path, s, e, text, to_pgvector(vec)),
+                    )
+            stored += len(batch_texts)
+            time.sleep(1)  # small pause between batches to avoid per-minute bursts
     finally:
         conn.close()
-    return len(texts)
+    return stored, total, error
 
 
 # ---------- Endpoints ----------
@@ -295,15 +344,23 @@ CODE:
         raise HTTPException(status_code=502, detail=f"Gemini error: {e}")
 
     # 2. Index the code for "Chat with repo". If this fails, analysis still succeeds.
-    chunks_stored = 0
+    chunks_stored, chunks_total, index_error = 0, 0, None
     try:
-        chunks_stored = ingest_files(req.repo_id, req.files)
-        print(f"Indexed {chunks_stored} chunks for repo {req.repo_id}")
+        chunks_stored, chunks_total, index_error = ingest_files(req.repo_id, req.files)
+        print(f"Indexed {chunks_stored}/{chunks_total} chunks for repo {req.repo_id}")
+        if index_error:
+            print(f"WARNING: indexing incomplete for repo {req.repo_id}: {index_error}")
     except Exception as e:
-        print(f"WARNING: could not store embeddings: {type(e).__name__}: {e}")
+        index_error = f"{type(e).__name__}: {e}"
+        print(f"WARNING: could not store embeddings: {index_error}")
 
     print(f"Analyzed {len(req.files)} files for repo {req.repo_id}")
-    return {"analysis": response.text, "chunks_stored": chunks_stored}
+    return {
+        "analysis": response.text,
+        "chunks_stored": chunks_stored,
+        "chunks_total": chunks_total,
+        "index_error": index_error,
+    }
 
 
 @app.post("/api/ai/chat")
