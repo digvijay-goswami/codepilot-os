@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { analyzeRepo } from '../api'
 
 export default function Home() {
-  const [url, setUrl] = useState('https://github.com/spring-projects/spring-petclinic')
+  const [url, setUrl] = useState('https://github.com/digvijay-goswami/codepilot-os')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
